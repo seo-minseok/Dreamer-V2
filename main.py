@@ -1,7 +1,10 @@
 import os
 os.environ['MUJOCO_GL'] = 'glfw'
 
+from dataclasses import asdict
+
 import csv
+import yaml
 
 import time
 from datetime import datetime
@@ -26,20 +29,19 @@ def main():
     start_time = time.time()
 
     env_id = "SafetyPointGoal1-v0"
-    env = SafetyGymEnv(env_id, size=(64, 64), action_repeat=5, bit_depth=5, 
-    device=device)
+    env = SafetyGymEnv(env_id, size=(64, 64), action_repeat=5, bit_depth=5, device=device)
     test_env = SafetyGymEnv(env_id, size=(64, 64), action_repeat=5, bit_depth=5, device=device)
 
     result_dir = os.path.join('results', datetime.now().strftime('%Y-%m-%d-%H-%M-') + f'{env_id}')
     model_dir = os.path.join(result_dir, 'models')
-    best_model_path = os.path.join(model_dir, 'best_model.pth')
+    model_path = os.path.join(model_dir, 'model.pth')
     os.makedirs(model_dir, exist_ok=True)
 
     # csv
     csv_path = os.path.join(result_dir, 'result.csv')
     csv_headers = [
         'iter', 'episode', 'EpRet', 'EpCost', 'EvalEpRet', 'EvalEpCost',
-        'world_loss', 'obs_loss', 'reward_loss', 'cost_loss', 'discount_loss',
+        'model_loss', 'obs_loss', 'reward_loss', 'cost_loss', 'discount_loss',
         'prior_entropy', 'post_entropy', 'kl_loss', 'actor_loss', 'critic_loss'
     ]
 
@@ -47,18 +49,24 @@ def main():
         writer = csv.DictWriter(f, fieldnames=csv_headers)
         writer.writeheader()
 
+    # configuration
     config = SafetyGymConfig(
         obs_shape=env.observation_space,
         act_size=env.action_space,
         model_dir=model_dir
     )
 
+    config_path = os.path.join(result_dir, 'config.yaml')
+    config_dict = asdict(config)
+
+    with open(config_path, 'w', encoding='utf-8') as f:
+        yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
+    
+
     trainer = Trainer(config, device)
     evaluator = Evaluator(config, device)
 
     train_metrics = {}
-
-    best_reward = -float('inf')
     
     print("🌱 Collecting seed episodes...")
     trainer.collect_seed_episodes(env)
@@ -68,6 +76,7 @@ def main():
     prev_action = torch.zeros(1, config.act_size).to(trainer.device)        # prev_action: (1, 2)
 
     train_reward, train_cost = 0, 0
+    eval_reward, eval_cost = 0, 0
     episode_entropies = []
     ep_count = 1
 
@@ -87,7 +96,7 @@ def main():
         if iter % trainer.config.train_every == 0:
             train_metrics = trainer.train_batch(train_metrics)
             outer_pbar.set_postfix({
-                'world_loss': f"{train_metrics.get('world_loss', 0):.4f}",
+                'model_loss': f"{train_metrics.get('model_loss', 0):.4f}",
                 'actor_loss': f"{train_metrics.get('actor_loss', 0):.4f}",
                 'critic_loss': f"{train_metrics.get('critic_loss', 0):.4f}"
             })
@@ -112,28 +121,27 @@ def main():
         train_reward += reward
         train_cost += cost
 
+        trainer.buffer.add(obs, action[0].cpu().numpy(), reward, cost, done)
+
         # Subprogressbar update
         collect_pbar.update(1)
         collect_pbar.set_postfix({'reward': f'{train_reward:.2f}', 'cost': f'{train_cost:.2f}'})
 
         if done:
-            trainer.buffer.add(obs, action[0].cpu().numpy(), reward, cost, done)
-            
-            train_metrics['train_steps'] = iter
             train_metrics['train_reward'] = train_reward
             train_metrics['train_cost'] = train_cost
             train_metrics['action_entropy'] = np.mean(episode_entropies)
 
-            if train_reward > best_reward:
-                best_reward = train_reward
-                save_dict = trainer.get_save_dict()
-                torch.save(save_dict, best_model_path)
-            
-            eval_reward, eval_cost = evaluator.eval_saved_agent(test_env, best_model_path)
-            outer_pbar.set_postfix({
-                'eval reward': f'{eval_reward:.2f}',
-                'eval cost': f'{eval_cost:.2f}'
-            })
+            save_dict = trainer.get_save_dict()
+            torch.save(save_dict, model_path)
+
+            # 3. Evaluation
+            if ep_count % trainer.config.eval_every == 0:
+                eval_reward, eval_cost = evaluator.eval_saved_agent(test_env, model_path)
+                outer_pbar.set_postfix({
+                    'eval reward': f'{eval_reward:.2f}',
+                    'eval cost': f'{eval_cost:.2f}'
+                })
 
             with open(csv_path, 'a', newline='') as f:
                 writer = csv.DictWriter(f, fieldnames=csv_headers)
@@ -144,7 +152,7 @@ def main():
                     'EpCost': train_metrics.get('train_cost', 0),
                     'EvalEpRet': eval_reward,
                     'EvalEpCost': eval_cost,
-                    'world_loss': train_metrics.get('world_loss', 0),
+                    'model_loss': train_metrics.get('model_loss', 0),
                     'obs_loss': train_metrics.get('obs_loss', 0),
                     'reward_loss': train_metrics.get('reward_loss', 0),
                     'cost_loss': train_metrics.get('cost_loss', 0),
@@ -161,14 +169,14 @@ def main():
             prev_action = torch.zeros(1, config.act_size).to(trainer.device)
 
             train_reward, train_cost = 0, 0
+            eval_reward, eval_cost = 0, 0
             episode_entropies = []
-            
             ep_count += 1
+
             collect_pbar.close()
             collect_pbar = tqdm(desc=f"  ┗ [Collect] Episode {ep_count}", position=1, leave=False)
 
         else:
-            trainer.buffer.add(obs, action[0].cpu().numpy(), reward, cost, done)
             obs = next_obs
             prev_rssm_state = posterior_rssm_state
             prev_action = action

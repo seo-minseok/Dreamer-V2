@@ -75,8 +75,7 @@ class ObsDecoder(nn.Module):
             self.activation(),
             nn.ConvTranspose2d(self.depth * 2, self.depth, self.kernel + 1, self.stride),
             self.activation(),
-            nn.ConvTranspose2d(self.depth, self.output_shape[0], self.kernel + 1, self.stride),
-            self.activation()
+            nn.ConvTranspose2d(self.depth, self.output_shape[0], self.kernel + 1, self.stride)
         ]
         return nn.Sequential(*deconvolutions)
     

@@ -44,7 +44,7 @@ class Evaluator(object):
 
     def eval_saved_agent(self, env, model_path):
         self.load_model(model_path)
-        eval_episodes = self.config.eval_episode
+        eval_episodes = self.config.eval_episodes
 
         total_rewards, total_costs = [], []
 

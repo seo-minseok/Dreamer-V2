@@ -15,12 +15,13 @@ class SafetyGymConfig:
     # training
     seed_episodes: int = 5
     train_steps: int = int(2e6)
-    train_every: int = 50
-    collect_intervals: int = 5
+    train_every: int = 200
+    collect_intervals: int = 100
     batch_size: int = 50
     seq_len: int = 50
-    eval_episode: int = 5
-    save_every: int = int(1e4)
+    eval_episodes: int = 30
+    eval_every: int = 20  # episode 단위
+    save_every: int = 2000
     model_dir: str = 'results'
 
     # buffer
@@ -28,7 +29,7 @@ class SafetyGymConfig:
 
     # rssm
     rssm_type: str = 'discrete'  # 'continuous' or 'discrete'
-    rssm_info: dict = field(default_factory=lambda:{'deter_size': 200, 'hid_dim': 200, 'stoch_size': 20, 'class_size': 32, 'category_size': 32, 'activation':nn.ELU ,'min_std': 0.1})
+    rssm_info: dict = field(default_factory=lambda:{'deter_size': 200, 'hid_dim': 200, 'stoch_size': 20, 'class_size': 32, 'category_size': 32, 'activation':nn.ELU ,'min_std': 0.1})  # continuous일때는 stoch_size를 30으로
 
     # actor
     actor_info: dict = field(default_factory=lambda:{'num_layers': 3, 'hid_dim': 100,  'dist': 'normal', 'activation':nn.ELU})
@@ -49,7 +50,7 @@ class SafetyGymConfig:
     decoder_info: dict = field(default_factory=lambda:{'num_layers': 3, 'hid_dim': 100, 'dist': 'normal', 'activation':nn.ELU, 'depth': 32, 'kernel': 5, 'stride': 2})
 
     # learning rate
-    lr: dict = field(default_factory=lambda:{'world': 2e-4, 'actor': 4e-5, 'critic': 1e-4})
+    lr: dict = field(default_factory=lambda:{'model': 2e-4, 'actor': 4e-5, 'critic': 1e-4})
 
     # objective
     grad_clip: float = 100.0

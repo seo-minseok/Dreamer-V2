@@ -79,15 +79,15 @@ class Trainer:
         self.decoder = ObsDecoder(output_shape=obs_shape, embed_dim=model_state_size, info=self.config.decoder_info).to(self.device)
 
     def _optim_initialize(self):
-        world_lr = self.config.lr['world']
+        model_lr = self.config.lr['model']
         actor_lr = self.config.lr['actor']
         critic_lr = self.config.lr['critic']
 
-        self.world_list = [self.encoder, self.RSSM, self.reward_model, self.cost_model, self.discount_model]
+        self.model_list = [self.encoder, self.decoder, self.RSSM, self.reward_model, self.cost_model, self.discount_model]
         self.actor_list = [self.actor]
         self.critic_list = [self.critic]
 
-        self.world_optimizer = optim.Adam(get_parameters(self.world_list), lr=world_lr)
+        self.model_optimizer = optim.Adam(get_parameters(self.model_list), lr=model_lr)
         self.actor_optimizer = optim.Adam(get_parameters(self.actor_list), lr=actor_lr)
         self.critic_optimizer = optim.Adam(get_parameters(self.critic_list), lr=critic_lr)
 
@@ -130,11 +130,11 @@ class Trainer:
         for _ in range(self.config.collect_intervals):
             obs, acts, rewards, costs, nonterms = self.buffer.sample(self.batch_size, self.seq_len)
 
-            world_loss, kl_loss, obs_loss, reward_loss, cost_loss, discount_loss, prior_dist ,post_dist, posterior = self.representation_loss(obs, acts, rewards, costs, nonterms)
+            model_loss, kl_loss, obs_loss, reward_loss, cost_loss, discount_loss, prior_dist ,post_dist, posterior = self.representation_loss(obs, acts, rewards, costs, nonterms)
 
-            self.world_optimizer.zero_grad()
-            world_loss.backward()
-            self.world_optimizer.step()
+            self.model_optimizer.zero_grad()
+            model_loss.backward()
+            self.model_optimizer.step()
 
             actor_loss, critic_loss = self.actor_critic_loss(posterior)
 
@@ -154,7 +154,7 @@ class Trainer:
                 prior_entropy = torch.mean(prior_dist.entropy())
                 post_entropy = torch.mean(post_dist.entropy())
 
-            train_stats['world_loss'].append(world_loss.item())
+            train_stats['model_loss'].append(model_loss.item())
             train_stats['obs_loss'].append(obs_loss.item())
             train_stats['reward_loss'].append(reward_loss.item())
             train_stats['cost_loss'].append(cost_loss.item())
@@ -188,9 +188,9 @@ class Trainer:
         discount_loss = self._discount_loss(discount_dist, nonterms[1:])  # using current latent state to predict next discount
         prior_dist, post_dist, kl_loss = self._kl_loss(prior, posterior)
 
-        world_loss = obs_loss + reward_loss + cost_loss + self.config.loss_scale['discount'] * discount_loss + self.config.loss_scale['kl'] * kl_loss
+        model_loss = obs_loss + reward_loss + cost_loss + self.config.loss_scale['discount'] * discount_loss + self.config.loss_scale['kl'] * kl_loss
 
-        return world_loss, kl_loss, obs_loss, reward_loss, cost_loss, discount_loss, prior_dist, post_dist, posterior
+        return model_loss, kl_loss, obs_loss, reward_loss, cost_loss, discount_loss, prior_dist, post_dist, posterior
     
     def _obs_loss(self, obs_dist, obs):
         obs_loss = -torch.mean(obs_dist.log_prob(obs))
@@ -234,12 +234,12 @@ class Trainer:
         with torch.no_grad():
             batched_posterior = self.RSSM.rssm_detach(self.RSSM.rssm_seq_to_batch(posterior, self.batch_size, self.seq_len - 1))
 
-        with FreezeParameters(self.world_list):
+        with FreezeParameters(self.model_list):
             imag_rssm_states, imag_log_prob, policy_entropy = self.RSSM.rollout_imagination(self.config.horizon, self.actor, batched_posterior)
 
         imag_model_states = self.RSSM.get_model_state(imag_rssm_states)
 
-        with FreezeParameters(self.world_list + self.critic_list + [self.target_critic] + [self.discount_model]):
+        with FreezeParameters(self.model_list + self.critic_list + [self.target_critic] + [self.discount_model]):
             imag_reward_dist = self.reward_model(imag_model_states)
             imag_reward = imag_reward_dist.mean
             
